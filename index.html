@@ -125,7 +125,7 @@
 
     async function startChat(token) {
       const strategy = new window.CopilotStudioDirectToEngineChatAdapter.ThirdPartyPublishedBotStrategy({
-        botSchema: 'cr336_jieAgent', // Replace with your Copilot Studio Agent schema name
+        botSchema: 'cr336_hrAgent', // Replace with your Copilot Studio Agent schema name
         environmentEndpointURL: new URL('https://f4fc370784d1e106bdc328e8a7e575.9d.environment.api.powerplatform.com/'), // Replace with your Power Platform environment endpoint
         getToken: () => token,
         transport: 'auto'
