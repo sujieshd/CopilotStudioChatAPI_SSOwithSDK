@@ -116,11 +116,68 @@
 
     async function getToken() {
       const accounts = msalInstance.getAllAccounts();
-      if (accounts.length > 0) {
-        return (await msalInstance.acquireTokenSilent({ ...loginRequest, account: accounts[0] })).accessToken;
-      } else {
-        return (await msalInstance.loginPopup({ ...loginRequest, prompt: "consent" })).accessToken;
+
+      if (accounts.length > 0 && !msalInstance.getActiveAccount?.()) {
+        msalInstance.setActiveAccount?.(accounts[0]);
       }
+
+      const account = msalInstance.getActiveAccount?.() ?? accounts[0];
+      if (!account) {
+        throw new Error('Not signed in');
+      }
+
+      return (await msalInstance.acquireTokenSilent({ ...loginRequest, account })).accessToken;
+    }
+
+    async function getTokenInteractive() {
+      const result = await msalInstance.acquireTokenPopup({
+        ...loginRequest,
+        prompt: 'select_account'
+      });
+
+      if (result?.account) {
+        msalInstance.setActiveAccount?.(result.account);
+      }
+
+      return result.accessToken;
+    }
+
+    function renderAuthPrompt(message) {
+      const overlay = document.createElement('div');
+      overlay.id = 'auth-overlay';
+      overlay.style.position = 'fixed';
+      overlay.style.inset = '0';
+      overlay.style.background = 'rgba(255, 255, 255, 0.92)';
+      overlay.style.zIndex = '9999';
+      overlay.style.display = 'flex';
+      overlay.style.alignItems = 'flex-start';
+      overlay.style.justifyContent = 'center';
+      overlay.style.padding = '32px 16px';
+
+      overlay.innerHTML = `
+        <div style="font-family: sans-serif; max-width: 900px; width: 100%;">
+          <div style="color: #b00020; margin-bottom: 12px;">${message}</div>
+          <button id="signin" style="padding: 10px 14px; font-size: 14px; cursor: pointer;">Sign in</button>
+          <div id="auth-error" style="color: #b00020; margin-top: 12px;"></div>
+        </div>
+      `;
+
+      document.body.appendChild(overlay);
+
+      const btn = overlay.querySelector('#signin');
+      const err = overlay.querySelector('#auth-error');
+
+      btn?.addEventListener('click', async () => {
+        try {
+          const token = await getTokenInteractive();
+          overlay.remove();
+          startChat(token);
+        } catch (e) {
+          if (err) {
+            err.textContent = `Authentication failed: ${e?.message ?? e}`;
+          }
+        }
+      });
     }
 
     async function startChat(token) {
@@ -206,10 +263,25 @@
 
     document.addEventListener('DOMContentLoaded', async () => {
       try {
+        // Avoid auto-popup on page load (can be blocked); attempt silent first.
         const token = await getToken();
         startChat(token);
       } catch (e) {
-        document.body.innerHTML = `<div style="color: red; font-family: sans-serif; padding: 1em;">Authentication failed: ${e.message}</div>`;
+        const errorCode = e?.errorCode ?? e?.code;
+        const isNotSignedIn = e?.message === 'Not signed in';
+        const needsInteraction = isNotSignedIn || [
+          'interaction_required',
+          'login_required',
+          'consent_required',
+          'no_tokens_found'
+        ].includes(errorCode);
+
+        if (needsInteraction) {
+          renderAuthPrompt('Authentication required. Click Sign in to continue.');
+          return;
+        }
+
+        document.body.innerHTML = `<div style="color: red; font-family: sans-serif; padding: 1em;">Authentication failed: ${e?.message ?? e}</div>`;
       }
     });
   </script>
