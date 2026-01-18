@@ -90,8 +90,8 @@
   <script>
     const msalInstance = new msal.PublicClientApplication({
       auth: {
-        clientId: "YOUR_CLIENT_ID", // Replace with your Microsoft Entra application client ID
-        authority: "https://login.microsoftonline.com/YOUR_TENANT_ID", // Replace with your tenant ID
+        clientId: "be62b702-ec48-415a-b36b-91f6c84716ae", // Replace with your Microsoft Entra application client ID
+        authority: "https://login.microsoftonline.com/50e627b2-4aa4-4b2f-a97f-a00e384850ca", // Replace with your tenant ID
         redirectUri: `${window.location.origin}${window.location.pathname}`
       },
       cache: {
@@ -125,8 +125,8 @@
 
     async function startChat(token) {
       const strategy = new window.CopilotStudioDirectToEngineChatAdapter.ThirdPartyPublishedBotStrategy({
-        botSchema: 'YOUR_AGENT_SCHEMA', // Replace with your Copilot Studio Agent schema name
-        environmentEndpointURL: new URL('https://YOUR_ENVIRONMENT_ENDPOINT.environment.api.powerplatform.com/'), // Replace with your Power Platform environment endpoint
+        botSchema: 'cr336_jieAgent', // Replace with your Copilot Studio Agent schema name
+        environmentEndpointURL: new URL('https://f4fc370784d1e106bdc328e8a7e575.9d.environment.api.powerplatform.com/'), // Replace with your Power Platform environment endpoint
         getToken: () => token,
         transport: 'auto'
       });

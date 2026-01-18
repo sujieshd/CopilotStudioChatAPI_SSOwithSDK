@@ -1,0 +1,13 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
+
+# Logs
+*.log
+
+# Local secrets (if you add any)
+.env
+.env.*
