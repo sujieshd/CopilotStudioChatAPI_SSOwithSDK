@@ -172,16 +172,47 @@
     }
 
     async function getTokenInteractive() {
-      const result = await msalInstance.acquireTokenPopup({
-        ...loginRequest,
-        prompt: 'select_account'
-      });
+      const isInPopupWindow = !!(window.opener && window.opener !== window);
 
-      if (result?.account) {
-        msalInstance.setActiveAccount?.(result.account);
+      // If this app itself is running in a popup, MSAL will block nested popups.
+      // In that case (or if popup auth fails), use redirect-based auth instead.
+      if (isInPopupWindow && msalInstance.loginRedirect) {
+        await msalInstance.loginRedirect({
+          ...loginRequest,
+          prompt: 'select_account',
+          loginHint
+        });
+        return null;
       }
 
-      return result.accessToken;
+      try {
+        const result = await msalInstance.acquireTokenPopup({
+          ...loginRequest,
+          prompt: 'select_account'
+        });
+
+        if (result?.account) {
+          msalInstance.setActiveAccount?.(result.account);
+        }
+
+        return result.accessToken;
+      } catch (e) {
+        const errorCode = e?.errorCode ?? e?.code;
+
+        if (
+          (errorCode === 'block_nested_popups' || errorCode === 'popup_window_error') &&
+          msalInstance.loginRedirect
+        ) {
+          await msalInstance.loginRedirect({
+            ...loginRequest,
+            prompt: 'select_account',
+            loginHint
+          });
+          return null;
+        }
+
+        throw e;
+      }
     }
 
     let interactiveTokenPromise = null;
@@ -223,6 +254,10 @@
     async function runInteractiveSignIn() {
       try {
         const token = await getTokenInteractive();
+        if (!token) {
+          // Redirect-based auth started; this page will navigate.
+          return;
+        }
         document.getElementById('auth-overlay')?.remove();
         updateAuthUi();
         interactiveTokenResolve?.(token);
@@ -331,7 +366,7 @@
       chatStarted = true;
 
       const strategy = new window.CopilotStudioDirectToEngineChatAdapter.ThirdPartyPublishedBotStrategy({
-        botSchema: 'cr336_jieAgent', // Replace with your Copilot Studio Agent schema name
+        botSchema: 'cr336_hrAgent', // Replace with your Copilot Studio Agent schema name cr336_hrAgent cr336_jieAgent
         environmentEndpointURL: new URL('https://f4fc370784d1e106bdc328e8a7e575.9d.environment.api.powerplatform.com/'), // Replace with your Power Platform environment endpoint
         getToken: () => getTokenOrPrompt(),
         transport: 'auto'
