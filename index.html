@@ -104,6 +104,20 @@
       scopes: ["https://api.powerplatform.com/CopilotStudio.Copilots.Invoke"]
     };
 
+    // Optional: enable best-effort silent SSO by supplying a login hint in the URL,
+    // e.g. https://.../index.html?login_hint=user@contoso.com
+    const loginHint = new URLSearchParams(window.location.search).get('login_hint') || undefined;
+
+    function isMsalInteractionRequired(e) {
+      const errorCode = e?.errorCode ?? e?.code;
+      return [
+        'interaction_required',
+        'login_required',
+        'consent_required',
+        'no_tokens_found'
+      ].includes(errorCode);
+    }
+
     function TypingIndicator({ isTyping }) {
       return React.createElement(
         'div',
@@ -142,7 +156,13 @@
       return result.accessToken;
     }
 
+    let interactiveTokenPromise = null;
+
     function renderAuthPrompt(message) {
+      if (document.getElementById('auth-overlay')) {
+        return;
+      }
+
       const overlay = document.createElement('div');
       overlay.id = 'auth-overlay';
       overlay.style.position = 'fixed';
@@ -159,32 +179,94 @@
           <div style="color: #b00020; margin-bottom: 12px;">${message}</div>
           <button id="signin" style="padding: 10px 14px; font-size: 14px; cursor: pointer;">Sign in</button>
           <div id="auth-error" style="color: #b00020; margin-top: 12px;"></div>
+          ${loginHint ? '' : '<div style="margin-top: 10px; color: #666; font-size: 12px;">Tip: for best-effort silent SSO, add <code>?login_hint=user@domain.com</code> to the URL.</div>'}
         </div>
       `;
 
       document.body.appendChild(overlay);
+    }
 
-      const btn = overlay.querySelector('#signin');
-      const err = overlay.querySelector('#auth-error');
+    function getTokenOrPrompt() {
+      if (interactiveTokenPromise) {
+        return interactiveTokenPromise;
+      }
 
-      btn?.addEventListener('click', async () => {
-        try {
-          const token = await getTokenInteractive();
-          overlay.remove();
-          startChat(token);
-        } catch (e) {
-          if (err) {
-            err.textContent = `Authentication failed: ${e?.message ?? e}`;
-          }
+      return getToken().catch(e => {
+        const isNotSignedIn = e?.message === 'Not signed in';
+        if (isNotSignedIn || isMsalInteractionRequired(e)) {
+          renderAuthPrompt('Authentication required. Click Sign in to continue.');
+
+          interactiveTokenPromise = new Promise((resolve, reject) => {
+            const overlay = document.getElementById('auth-overlay');
+            const btn = overlay?.querySelector('#signin');
+            const err = overlay?.querySelector('#auth-error');
+
+            btn?.addEventListener(
+              'click',
+              async () => {
+                try {
+                  const token = await getTokenInteractive();
+                  overlay?.remove();
+                  resolve(token);
+                } catch (ex) {
+                  if (err) {
+                    err.textContent = `Authentication failed: ${ex?.message ?? ex}`;
+                  }
+                  reject(ex);
+                } finally {
+                  interactiveTokenPromise = null;
+                }
+              },
+              { once: true }
+            );
+
+            if (!btn) {
+              interactiveTokenPromise = null;
+              reject(new Error('Sign-in UI failed to render'));
+            }
+          });
+
+          return interactiveTokenPromise;
         }
+
+        throw e;
       });
     }
 
-    async function startChat(token) {
+    async function ensureSignedInSilently() {
+      const accounts = msalInstance.getAllAccounts();
+      if (accounts.length > 0) {
+        if (!msalInstance.getActiveAccount?.()) {
+          msalInstance.setActiveAccount?.(accounts[0]);
+        }
+        return;
+      }
+
+      // True silent SSO requires an existing Entra session + browser allowing the iframe flow.
+      // Providing loginHint makes this more reliable.
+      if (!loginHint || !msalInstance.ssoSilent) {
+        return;
+      }
+
+      try {
+        const result = await msalInstance.ssoSilent({
+          ...loginRequest,
+          loginHint,
+          prompt: 'none'
+        });
+        if (result?.account) {
+          msalInstance.setActiveAccount?.(result.account);
+        }
+      } catch {
+        // Ignore and fall back to user-click interactive sign-in.
+      }
+    }
+
+    async function startChat() {
       const strategy = new window.CopilotStudioDirectToEngineChatAdapter.ThirdPartyPublishedBotStrategy({
         botSchema: 'cr336_jieAgent', // Replace with your Copilot Studio Agent schema name
         environmentEndpointURL: new URL('https://f4fc370784d1e106bdc328e8a7e575.9d.environment.api.powerplatform.com/'), // Replace with your Power Platform environment endpoint
-        getToken: () => token,
+        getToken: () => getTokenOrPrompt(),
         transport: 'auto'
       });
 
@@ -263,24 +345,14 @@
 
     document.addEventListener('DOMContentLoaded', async () => {
       try {
-        // Avoid auto-popup on page load (can be blocked); attempt silent first.
-        const token = await getToken();
-        startChat(token);
+        await msalInstance.initialize?.();
+        await msalInstance.handleRedirectPromise?.();
+        await ensureSignedInSilently();
+
+        // Fetch token up-front (silent if possible); interactive requires user click.
+        await getTokenOrPrompt();
+        startChat();
       } catch (e) {
-        const errorCode = e?.errorCode ?? e?.code;
-        const isNotSignedIn = e?.message === 'Not signed in';
-        const needsInteraction = isNotSignedIn || [
-          'interaction_required',
-          'login_required',
-          'consent_required',
-          'no_tokens_found'
-        ].includes(errorCode);
-
-        if (needsInteraction) {
-          renderAuthPrompt('Authentication required. Click Sign in to continue.');
-          return;
-        }
-
         document.body.innerHTML = `<div style="color: red; font-family: sans-serif; padding: 1em;">Authentication failed: ${e?.message ?? e}</div>`;
       }
     });
