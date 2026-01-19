@@ -43,6 +43,29 @@
       width: 100%;
     }
 
+    #topbar {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid #e6e6e6;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+      font-size: 13px;
+      color: #242424;
+    }
+
+    #signin-top {
+      padding: 7px 10px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
     .typing-indicator {
       min-height: 24px;
       transition: padding 0.2s ease;
@@ -83,6 +106,11 @@
 </head>
 
 <body>
+  <div id="topbar">
+    <span id="auth-status">Signed out</span>
+    <button id="signin-top" type="button">Sign in</button>
+  </div>
+
   <div id="webchat-container">
     <div id="webchat" role="main"></div>
   </div>
@@ -157,6 +185,62 @@
     }
 
     let interactiveTokenPromise = null;
+    let interactiveTokenResolve = null;
+    let interactiveTokenReject = null;
+
+    let chatStarted = false;
+
+    function updateAuthUi() {
+      const statusEl = document.getElementById('auth-status');
+      const btn = document.getElementById('signin-top');
+      if (!statusEl || !btn) {
+        return;
+      }
+
+      const account = msalInstance.getActiveAccount?.() ?? msalInstance.getAllAccounts?.()[0];
+      if (account) {
+        statusEl.textContent = `Signed in: ${account.username ?? account.name ?? 'account'}`;
+        btn.textContent = 'Switch account';
+      } else {
+        statusEl.textContent = 'Signed out';
+        btn.textContent = 'Sign in';
+      }
+    }
+
+    function ensureInteractiveTokenPromise() {
+      if (interactiveTokenPromise) {
+        return interactiveTokenPromise;
+      }
+
+      interactiveTokenPromise = new Promise((resolve, reject) => {
+        interactiveTokenResolve = resolve;
+        interactiveTokenReject = reject;
+      });
+
+      return interactiveTokenPromise;
+    }
+
+    async function runInteractiveSignIn() {
+      try {
+        const token = await getTokenInteractive();
+        document.getElementById('auth-overlay')?.remove();
+        updateAuthUi();
+        interactiveTokenResolve?.(token);
+        if (!chatStarted) {
+          startChat();
+        }
+      } catch (e) {
+        const err = document.querySelector('#auth-overlay #auth-error');
+        if (err) {
+          err.textContent = `Authentication failed: ${e?.message ?? e}`;
+        }
+        interactiveTokenReject?.(e);
+      } finally {
+        interactiveTokenPromise = null;
+        interactiveTokenResolve = null;
+        interactiveTokenReject = null;
+      }
+    }
 
     function renderAuthPrompt(message) {
       if (document.getElementById('auth-overlay')) {
@@ -184,6 +268,13 @@
       `;
 
       document.body.appendChild(overlay);
+
+      // Bind overlay button to the same interactive sign-in flow as the top bar.
+      const btn = overlay.querySelector('#signin');
+      btn?.addEventListener('click', async () => {
+        ensureInteractiveTokenPromise();
+        await runInteractiveSignIn();
+      });
     }
 
     function getTokenOrPrompt() {
@@ -196,37 +287,8 @@
         if (isNotSignedIn || isMsalInteractionRequired(e)) {
           renderAuthPrompt('Authentication required. Click Sign in to continue.');
 
-          interactiveTokenPromise = new Promise((resolve, reject) => {
-            const overlay = document.getElementById('auth-overlay');
-            const btn = overlay?.querySelector('#signin');
-            const err = overlay?.querySelector('#auth-error');
-
-            btn?.addEventListener(
-              'click',
-              async () => {
-                try {
-                  const token = await getTokenInteractive();
-                  overlay?.remove();
-                  resolve(token);
-                } catch (ex) {
-                  if (err) {
-                    err.textContent = `Authentication failed: ${ex?.message ?? ex}`;
-                  }
-                  reject(ex);
-                } finally {
-                  interactiveTokenPromise = null;
-                }
-              },
-              { once: true }
-            );
-
-            if (!btn) {
-              interactiveTokenPromise = null;
-              reject(new Error('Sign-in UI failed to render'));
-            }
-          });
-
-          return interactiveTokenPromise;
+          // Returns a promise that resolves when the user clicks Sign in (top bar or overlay).
+          return ensureInteractiveTokenPromise();
         }
 
         throw e;
@@ -263,6 +325,11 @@
     }
 
     async function startChat() {
+      if (chatStarted) {
+        return;
+      }
+      chatStarted = true;
+
       const strategy = new window.CopilotStudioDirectToEngineChatAdapter.ThirdPartyPublishedBotStrategy({
         botSchema: 'cr336_jieAgent', // Replace with your Copilot Studio Agent schema name
         environmentEndpointURL: new URL('https://f4fc370784d1e106bdc328e8a7e575.9d.environment.api.powerplatform.com/'), // Replace with your Power Platform environment endpoint
@@ -348,6 +415,13 @@
         await msalInstance.initialize?.();
         await msalInstance.handleRedirectPromise?.();
         await ensureSignedInSilently();
+
+        updateAuthUi();
+
+        document.getElementById('signin-top')?.addEventListener('click', async () => {
+          ensureInteractiveTokenPromise();
+          await runInteractiveSignIn();
+        });
 
         // Fetch token up-front (silent if possible); interactive requires user click.
         await getTokenOrPrompt();
